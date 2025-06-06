@@ -16,6 +16,7 @@ import { useLanguage } from "@/contexts/language-context"
 import { TokenSetupDialog } from "@/components/token-setup-dialog"
 import { Progress } from "@/components/ui/progress"
 import { GitHubService, type StreamProgress } from "@/services/github-service"
+import { Footer } from "@/components/footer"
 
 interface User {
   login: string
@@ -58,6 +59,9 @@ export default function GitHubStargazersAnalyzer() {
   const [statusMessage, setStatusMessage] = useState("")
   const [warnings, setWarnings] = useState<string[]>([])
   const [isCompleted, setIsCompleted] = useState(false)
+
+  // Track unique users to prevent duplicates in UI
+  const userMapRef = useRef<Map<string, User>>(new Map())
 
   // Load token from localStorage on component mount
   useEffect(() => {
@@ -105,6 +109,23 @@ export default function GitHubStargazersAnalyzer() {
 
   const githubServiceRef = useRef<GitHubService | null>(null)
 
+  // Helper function to add unique users
+  const addUniqueUsers = (newUsers: User[]) => {
+    let addedCount = 0
+    newUsers.forEach((user) => {
+      if (!userMapRef.current.has(user.login)) {
+        userMapRef.current.set(user.login, user)
+        addedCount++
+      }
+    })
+
+    if (addedCount > 0) {
+      setUsers(Array.from(userMapRef.current.values()))
+    }
+
+    return addedCount
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
@@ -127,6 +148,7 @@ export default function GitHubStargazersAnalyzer() {
     setLoading(true)
     setError("")
     setUsers([])
+    userMapRef.current.clear() // Clear the user map
     setProgress(0)
     setTotalUsers(0)
     setStatusMessage(t("startingAnalysis"))
@@ -158,8 +180,9 @@ export default function GitHubStargazersAnalyzer() {
             if (message.processed && message.total) {
               setProgress((message.processed / message.total) * 100)
             }
-            if (message.users) {
-              setUsers((prev) => [...prev, ...message.users!])
+            if (message.users && message.users.length > 0) {
+              const addedCount = addUniqueUsers(message.users)
+              console.log(`Added ${addedCount} new unique users out of ${message.users.length} received`)
             }
             break
 
@@ -168,7 +191,9 @@ export default function GitHubStargazersAnalyzer() {
             setProgress(100)
             setIsCompleted(true)
             if (message.users) {
-              setUsers(message.users)
+              // Final deduplication
+              userMapRef.current.clear()
+              addUniqueUsers(message.users)
             }
             setLoading(false)
             break
@@ -374,6 +399,8 @@ export default function GitHubStargazersAnalyzer() {
             <UserTable users={users} />
           </div>
         )}
+        {/* Footer */}
+        <Footer />
       </div>
     </div>
   )

@@ -92,6 +92,13 @@ const translations = {
     warnings: "Warnings & Retries",
     andMoreWarnings: "... and {count} more warnings",
     analysisCompleted: "Analysis completed successfully!",
+
+    // Footer
+    openSourceOnGitHub: "Open Source on GitHub",
+    builtWith: "Built with",
+    by: "by",
+    footerDescription:
+      "This application was completely written by v0.dev, Vercel's AI-powered frontend development assistant.",
   },
   zh: {
     // Header
@@ -172,6 +179,12 @@ const translations = {
     warnings: "警告和重试",
     andMoreWarnings: "... 还有 {count} 个警告",
     analysisCompleted: "分析成功完成！",
+
+    // Footer
+    openSourceOnGitHub: "在 GitHub 上开源",
+    builtWith: "使用",
+    by: "构建，由",
+    footerDescription: "此应用程序完全由 v0.dev（Vercel 的 AI 驱动前端开发助手）编写。",
   },
 }
 

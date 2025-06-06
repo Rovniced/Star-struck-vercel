@@ -26,9 +26,13 @@ export interface StreamProgress {
 export class GitHubService {
   private token: string
   private abortController: AbortController | null = null
+  private processedUsers: Set<string> = new Set() // Track processed user logins
+  private allUsers: Map<string, User> = new Map() // Store unique users by login
 
   constructor(token: string) {
     this.token = token
+    this.processedUsers.clear()
+    this.allUsers.clear()
   }
 
   private getHeaders(): HeadersInit {
@@ -86,6 +90,10 @@ export class GitHubService {
     maxUsers = 100,
     onProgress?: (progress: StreamProgress) => void,
   ): Promise<User[]> {
+    // Reset tracking for new analysis
+    this.processedUsers.clear()
+    this.allUsers.clear()
+
     try {
       // First, get all stargazers with retry mechanism
       const stargazers = await this.getStargazersWithRetry(owner, repo, maxUsers, onProgress)
@@ -100,30 +108,36 @@ export class GitHubService {
         return []
       }
 
+      // Remove duplicates from stargazers list
+      const uniqueStargazers = this.removeDuplicateStargazers(stargazers)
+
       // Send initial progress
       if (onProgress) {
         onProgress({
           type: "progress",
-          message: `Found ${stargazers.length} stargazers, starting detailed analysis...`,
-          total: stargazers.length,
+          message: `Found ${uniqueStargazers.length} unique stargazers, starting detailed analysis...`,
+          total: uniqueStargazers.length,
           processed: 0,
         })
       }
 
       // Process users with comprehensive error handling
-      const users = await this.processUsersWithRetry(stargazers, onProgress)
+      const users = await this.processUsersWithRetry(uniqueStargazers, onProgress)
+
+      // Final deduplication and result
+      const finalUsers = Array.from(this.allUsers.values())
 
       // Send final result
       if (onProgress) {
         onProgress({
           type: "complete",
-          message: `Analysis complete! Successfully processed ${users.length} users out of ${stargazers.length} stargazers.`,
-          users: users,
-          total: users.length,
+          message: `Analysis complete! Successfully processed ${finalUsers.length} unique users out of ${uniqueStargazers.length} stargazers.`,
+          users: finalUsers,
+          total: finalUsers.length,
         })
       }
 
-      return users
+      return finalUsers
     } catch (error) {
       if (onProgress) {
         onProgress({
@@ -133,6 +147,17 @@ export class GitHubService {
       }
       return []
     }
+  }
+
+  private removeDuplicateStargazers(stargazers: any[]): any[] {
+    const seen = new Set<string>()
+    return stargazers.filter((stargazer) => {
+      if (seen.has(stargazer.login)) {
+        return false
+      }
+      seen.add(stargazer.login)
+      return true
+    })
   }
 
   private async getStargazersWithRetry(
@@ -237,7 +262,6 @@ export class GitHubService {
     onProgress?: (progress: StreamProgress) => void,
   ): Promise<User[]> {
     const batchSize = 5
-    const results = []
     let processedCount = 0
 
     for (let i = 0; i < stargazers.length; i += batchSize) {
@@ -248,17 +272,33 @@ export class GitHubService {
       while (batchRetries < maxBatchRetries) {
         try {
           const batchResults = await this.processBatchWithRetry(batch)
-          results.push(...batchResults)
+
+          // Add unique users to our collection
+          const newUsers: User[] = []
+          for (const user of batchResults) {
+            if (!this.allUsers.has(user.login)) {
+              this.allUsers.set(user.login, user)
+              newUsers.push(user)
+            }
+          }
+
           processedCount += batch.length
 
-          // Send progress update with successful results
-          if (onProgress) {
+          // Send progress update with only new unique users
+          if (onProgress && newUsers.length > 0) {
             onProgress({
               type: "progress",
-              message: `Processed ${processedCount} of ${stargazers.length} users`,
+              message: `Processed ${processedCount} of ${stargazers.length} users (${this.allUsers.size} unique)`,
               total: stargazers.length,
               processed: processedCount,
-              users: batchResults,
+              users: newUsers,
+            })
+          } else if (onProgress) {
+            onProgress({
+              type: "progress",
+              message: `Processed ${processedCount} of ${stargazers.length} users (${this.allUsers.size} unique, no new users in this batch)`,
+              total: stargazers.length,
+              processed: processedCount,
             })
           }
 
@@ -301,11 +341,16 @@ export class GitHubService {
       }
     }
 
-    return results
+    return Array.from(this.allUsers.values())
   }
 
   private async processBatchWithRetry(stargazers: any[]): Promise<User[]> {
     const userPromises = stargazers.map(async (user) => {
+      // Skip if already processed
+      if (this.processedUsers.has(user.login)) {
+        return null
+      }
+
       let retries = 0
       const maxRetries = 3
 
@@ -320,7 +365,8 @@ export class GitHubService {
 
           if (!userResponse.ok) {
             if (userResponse.status === 404) {
-              // User not found, return null
+              // User not found, mark as processed and return null
+              this.processedUsers.add(user.login)
               return null
             }
             throw new Error(`User API error: ${userResponse.status}`)
@@ -331,7 +377,10 @@ export class GitHubService {
           // Get user's total stars with retry
           const totalStars = await this.getUserTotalStarsWithRetry(user.login)
 
-          return {
+          // Mark as processed
+          this.processedUsers.add(user.login)
+
+          const processedUser: User = {
             login: userData.login,
             name: userData.name || userData.login,
             avatar_url: userData.avatar_url,
@@ -347,10 +396,13 @@ export class GitHubService {
             total_stars: totalStars,
             starred_at: user.starred_at,
           }
+
+          return processedUser
         } catch (error) {
           retries++
           if (retries >= maxRetries) {
             console.error(`Failed to fetch user ${user.login} after ${maxRetries} retries:`, error)
+            this.processedUsers.add(user.login) // Mark as processed even if failed
             return null
           }
 
